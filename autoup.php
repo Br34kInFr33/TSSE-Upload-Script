@@ -1,298 +1,380 @@
 <?php
-
-define('ROOT_PATH', '/home/upload');
-define('UPLOAD_PATH', ROOT_PATH.'/scan');
-define('MOVE_PATH', ROOT_PATH.'/move');
-define('ERROR_PATH', ROOT_PATH.'/error');
-define('TORRENT_PATH', ROOT_PATH.'/torrent');
-define('TEMP_TORRENT', ROOT_PATH.'/temp');
-
-define('LOG_FILE', ROOT_PATH.'/bot.log');
-define('JOB_LOG', ROOT_PATH.'/jobs');
-
-define('SITE_ROOT', 'http://51.83.72.245');
-define('ANNOUNCE_URL', 'http://51.83.72.245/announce.php');
-define('QUICK_LOGIN', 'http://51.83.72.245/pagelogin.php?qlogin=90e763c53c9da922304a5aef982f7c5b533f0770efbe259161c87d0a889bcf3d320bc88839ba8a8e93a29dcb19896631');
-
-define('TMDB_API', '2b2c0a99175ae7746878c600d8f744f7');
-
-define('SCENE_AXX', true);
-
+ 
+require_once('config.php');
 error_reporting(E_ALL);
 ini_set("log_errors", true);
 ini_set("error_log", LOG_FILE);
-
-function move($source, $dest)
-{
-	$cmd = 'mv "'.$source.'" "'.$dest.'"'; 
-	exec($cmd, $output, $return_val); 
-	if ($return_val == 0) return 1;
-	return 0;
-}
-
-function make_login()
-{
-	$login_url = QUICK_LOGIN;
-	$ch = curl_init($login_url);
-	curl_setopt($ch, CURLOPT_FOLLOWLOCATION, TRUE);
-	curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
-	curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-	curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
-	curl_setopt($ch, CURLOPT_COOKIEJAR, 'cookie.txt');
-	$rez = curl_exec($ch);
-	if (!$rez) die('Cannot login!');
-	echo file_put_contents(LOG_FILE, 'Cannot login! '.date('m/d/Y h:i:s')."\r\n", FILE_APPEND);
-}
-
-function make_torrent($file)
-{
-	$info = pathinfo($file);
-	$output = TEMP_TORRENT.'/'.$info['basename'].'.torrent';
-	if (file_exists($output)) unlink($output);
-	$cmd = "mktorrent '$file' -o '$output' -a ".ANNOUNCE_URL;
-	exec($cmd);
-	if (file_exists($output)) return $output;
-	else die('Cannot make torrent!');
-	echo file_put_contents(LOG_FILE, "Cannot make $file torrent! ".date('m/d/Y h:i:s')."\r\n", FILE_APPEND);
-}
-
-function make_upload($file_full, $ext, $new_dir)
-{
-	$file = pathinfo($file_full, PATHINFO_BASENAME);
-	$file_without_ext = pathinfo($file_full, PATHINFO_FILENAME);
-	
-	$move_file = $new_dir.'/'.$file;
-	$nfo_file = $new_dir.'/'.$file;
-			
-	$rez = move($file_full, $move_file);
-	if (!$rez) die('Cannot move file!');
-	$torrent = make_torrent($move_file);
-	
-        $source = glob($nfo_file.'/*.nfo');
-	
-	$nfo = 'There was no nfo file found!';
-	foreach ($source as $a) {
-	if (substr(strtolower($a), -4) == '.nfo') {
-	$nfo = file_get_contents($a);
-	$match = array("/[^a-zA-Z0-9-._&?:'\/\s]/", "/\s{2,}/");
-	$replace = array("", " ");
-	$nfo = preg_replace($match, $replace, trim($nfo));
-	}
-	}
-	
-	switch(true)
-	{
-	case preg_match('/http:\/\/www.imdb.com\/title\/tt[\d]+\//', $nfo) : preg_match('/http:\/\/www.imdb.com\/title\/tt[\d]+\//', $nfo, $matches); break;
-	default : preg_match('/http:\/\/www.imdb.com\/title\/tt[\d]+/', $nfo, $matches); break;
-  	}
-	$imdb = $matches[0];
-
-	switch(true)
-	{
-	case preg_match('/s\d+e\d+|s\d+|hdtv|sdtv|pdtv|tvrip/i', $file) : $cat = 5; break;
-	case preg_match('/xvid|brrip|bluray|dvdrip|hdrip/i', $file) : $cat = 10; break;
-	case preg_match('/x86|x64|win64|lnx64|macosx/i', $file) : $cat = 1; break;
-	case preg_match('/wii|wiiu|xbox|xbox360|ps3|ps4/i', $file) : $cat = 2; break;
-	case preg_match('/dvdr/i', $file) : $cat = 3; break;
-	case preg_match('/mp3|flac|lossless|cd|compilation|album|albums|vinyl/i', $file) : $cat = 4; break;
-	case preg_match('/xxx/i', $file) : $cat = 6; break;
-	case preg_match('/psp/i', $file) : $cat = 7; break;
-	case preg_match('/ps2/i', $file) : $cat = 8; break;
-	case preg_match('/anime/i', $file) : $cat = 9; break;
-	case preg_match('/720p|1080p/i', $file) : $cat = 11; break;
-	case preg_match('/pc/i', $file) : $cat = 12; break;
-	default : $cat = 9;
-	}
-
-	$torrent_info = Array();
-	$torrent_info['name'] = $file;
-	$torrent_info['descr'] = $nfo;
-	$torrent_info['url'] = $imdb;
-	$torrent_info['type']= $cat;
-	$torrent_info['poster'] = '';
-	
-	if(TMDB_API != '')
-	{
-	  if(($cat === 10) || ($cat === 11))
-	  {
-	    $file_name = $file;
-	    switch(true)
-	    {
-	      case preg_match('/^\d+.[a-z.]+.\d+/i', $file_name) : preg_match('/\d+.[a-z.]+.\d+/i', $file_name, $matching); break;
-	      case preg_match('/^\d+.\d+/', $file_name) : preg_match('/\d+.\d+/', $file_name, $matching); break;
-	      default : preg_match("/[a-z.]+.\d{4}/i", $file_name, $matching);
+ 
+print "Running bot startup checks...\r\n";
+ 
+ // Checks whether required things are sets
+ setting_checker ('WATCH_DIR', "Invalid watch dir setting!", array ('is_dir', 'die'));
+ setting_checker ('ERROR_DIR', "Invalid error dir setting!", array ('is_dir', 'die'));
+ setting_checker ('COMPLETE_DIR', "Invalid complete dir setting!", array ('is_dir', 'die'));
+ setting_checker ('TMP_DIR', "Invalid temp dir setting!", array ('is_dir', 'die'));
+ setting_checker ('MKTORRENT', "Invalid mktorrent setting!", array ('is_file', 'die'));
+ setting_checker ('SITE_NICK', "Invalid site nick setting!", array ('die'));
+ setting_checker ('SITE_PASS', "Invalid site pass setting!", array ('die'));
+ setting_checker ('ANNOUNCE_URL', "Invalid announce url setting!", array ('die'));
+ setting_checker ('OUTPUT_DIR', "Invalid output dir setting!", array ('is_dir', 'die'));
+ setting_checker ('SCAN_INTERVAL', "Invalid scan interval setting!", array ('die'));
+ 
+ if (setting_checker (JOB_DIR, '', array ('is_dir'))) {
+     print "Using optional job dir (".JOB_DIR.")\r\n";
+     $record_jobs = true;
+ } else {
+     print "Not using optional job dir (Unset or invalid)\r\n";
+     $record_jobs = false;
+ }
+ if (setting_checker (LOG_FILE)) {
+     print "Using optional log file (".LOG_FILE.")\r\n";
+     $record_main = true;
+ } else {
+     print "Not using optional log file (Unset or invalid)\r\n";
+     $record_main = false;
+ }
+ if (setting_checker (CKSFV, '', array ('is_file'))) {
+     print "Using optional cksfv (".CKSFV.")\r\n";
+     $run_sfv = true;
+ } else {
+     print "Not using optional cksfv (Unset or invalid)\r\n";
+     $run_sfv = false;
+ }
+// Checks complete.
+ 
+print "Bot started!\r\n\r\n";
+ 
+while (true) {
+    $queue_list = list_dir(WATCH_DIR);
+    if ($queue_list === false) {
+        print "Error accessing watch directory\r\n";
+        if ($record_main)
+            write_log(LOG_FILE, "Error accessing watch directory");
+    } else {
+        if (empty($queue_list)) {
+            if ($record_main)
+                write_log(LOG_FILE, "No jobs in this scan");
+        } else {
+            foreach ($queue_list as $job) {
+                $job_log = JOB_DIR . $job;
+                if (substr($job_log, -1) == '/')
+                    $job_log = substr($job_log, 0, -1);
+               
+                print "Processing $job...\r\n";
+                if ($record_main)
+                    write_log(LOG_FILE, "Processing $job...");
+                if ($record_jobs)
+                    write_log($job_log, "Started processing");
+               
+                $location = WATCH_DIR . $job;
+               
+                // Directory
+                if (substr($job, -1) == '/') {
+                    $name = substr($job, 0, -1);
+                   
+                    // Remove .txt files
+                    $files = find_extension($location, '.txt');
+                    foreach ($files as $file)
+                        unlink($location . $file);
+                   
+                    $file_list = list_dir(WATCH_DIR . $job);
+                   
+                    $nfo = "There was no NFO supplied with this release";
+                    foreach ($file_list as $file) {
+                        if (substr(strtolower($file), -4) == '.nfo' && is_file(WATCH_DIR . $job . $file)) {
+                            $nfo     = file_get_contents(WATCH_DIR . $job . $file); // NFO found, get it
+                            $match   = array(
+                                "/[^a-zA-Z0-9-+.,&=??????:;*'\"???\/\@\[\]\(\)\s]/",
+                                "/((\x0D\x0A\s*){3,}|(\x0A\s*){3,}|(\x0D\s*){3,})/",
+                                "/\x0D\x0A|\x0A|\x0D/"
+                            );
+                            $replace = array(
+                                "",
+                                "\n\n",
+                                "\n"
+                            );
+                            $nfo     = preg_replace($match, $replace, trim($nfo));
+                           
+                            print "NFO found\r\n";
+                            if ($record_main)
+                                write_log(LOG_FILE, "NFO found ($file)");
+                            if ($record_jobs)
+                                write_log($job_log, "NFO found ($file)");
+                            break;
+                        }
+                    }
+                   
+                    if ($run_sfv) {
+                        if ($record_jobs)
+                            write_log($job_log, "SFV enabled");
+                        $sfv_passed = null;
+                        foreach ($file_list as $file) {
+                            if (substr(strtolower($file), -4) == '.sfv' && is_file(WATCH_DIR . $job . $file)) {
+                                print "Running SFV checker ($file)\r\n";
+                                if ($record_main)
+                                    write_log(LOG_FILE, "Running SFV checker ($file)");
+                                if ($record_jobs)
+                                    write_log($job_log, "Running SFV checker ($file)");
+                                $sfv_output = shell_exec(CKSFV . ' -g ' . escapeshellarg(WATCH_DIR . $job . $file) . ' 2>&1');
+                                if ($record_jobs)
+                                    write_log($job_log, trim($sfv_output));
+                               
+                                $out = explode("\n", trim($sfv_output));
+                                if (stripos(end($out), "everything ok") > -1) {
+                                    print "SFV passed\r\n";
+                                    if ($record_main)
+                                        write_log(LOG_FILE, "SFV passed");
+                                    $sfv_passed = true;
+                                } else {
+                                    $sfv_passed = false;
+                                }
+                                break;
+                            }
+                        }
+                       
+                        if ($sfv_passed === false) {
+                            shell_exec("mv " . escapeshellarg(WATCH_DIR . $job) . " " . escapeshellarg(ERROR_DIR . $job));
+                            print "SFV failed\r\n";
+                            if ($record_main)
+                                write_log(LOG_FILE, "SFV failed");
+                            continue;
+                        }
+                    }
+                   
+                    // Completed folder-specific stuff (nfo, sfv)
+                   
+                    // File
+                } else {
+                    $nfo = "NFO Unavailable";
+                    print "No NFO (single-file job)\r\n";
+                    if ($record_main)
+                        write_log(LOG_FILE, "No NFO (single-file job)");
+                    if ($record_jobs)
+                        write_log($job_log, "No NFO (single-file job)");
+                   
+                    print "No SFV checking (single-file job)\r\n";
+                    if ($record_main)
+                        write_log(LOG_FILE, "No SFV checking (single-file job)");
+                    if ($record_jobs)
+                        write_log($job_log, "No SFV checking (single-file job)");
+                   
+                    // Get the torrent name (file name minus the extension)
+                    $name = $job;
+                    $name = explode('.', $name);
+                    array_pop($name);
+                }
+               
+                print "Creating torrent...\r\n";
+                $temp_torrent = TMP_DIR . $name . ".torrent";
+                $torrent_out  = shell_exec(MKTORRENT . " -a " . escapeshellarg(ANNOUNCE_URL) . " -l " . 20 . " -o " . escapeshellarg($temp_torrent) . " -p " . escapeshellarg(WATCH_DIR . $job) . ' 2>&1');
+                if ($record_jobs)
+                    write_log($job_log, trim($torrent_out));
+                echo $torrent_out;
+                if (substr(trim($torrent_out), -5) != "done.") {
+                    unlink($temp_torrent);
+                    shell_exec("mv " . escapeshellarg(WATCH_DIR . $job) . " " . escapeshellarg(ERROR_DIR));
+                    print "Torrent creation failed\r\n";
+                    if ($record_main)
+                        write_log(LOG_FILE, "Torrent creation failed");
+                   
+                    continue;
+                }
+               
+                print "Torrent creation complete\r\n";
+                if ($record_main)
+                    write_log(LOG_FILE, "Torrent creation complete");
+               
+                print "Uploading\r\n";
+                if ($record_main)
+                    write_log(LOG_FILE, "Uploading torrent");
+                if ($record_jobs)
+                    write_log($job_log, "Uploading torrent");
+               
+                $login = log_in();
+                if ($record_jobs)
+                    write_log($job_log, trim($login));
+               
+                sleep(5);
+               
+                $upload = upload($temp_torrent, $name, $nfo);
+                if ($record_jobs)
+                    write_log($job_log, trim($upload));
+               
+                shell_exec("mv " . escapeshellarg(WATCH_DIR . $job) . " " . escapeshellarg(COMPLETE_DIR));
+                shell_exec("mv " . escapeshellarg($temp_torrent) . " " . escapeshellarg(OUTPUT_DIR . $name . '.torrent'));
+               
+                print "Completed $job\r\n";
+                if ($record_main)
+                    write_log(LOG_FILE, "Completed $job");
+                if ($record_jobs)
+                    write_log($job_log, "Completed $job");
+            }
         }
-	    $year = substr($matching[0], -4);
-        $title = substr_replace($matching[0],"", -5);
-        $title = str_replace('.', '+', $title);
-	    $obj = json_decode(file_get_contents('https://api.themoviedb.org/3/search/movie?api_key='.TMDB_API.'&language=en-US&query='.$title.'&page=1&include_adult=false&year='.$year), true);
-        if($obj['total_results'] == 0)
-		{
-		 $torrent_info['poster'] = SITE_ROOT.'/pic/noposter.png';
-		}
-		else
-	    {
-          $copy_poster = $obj['results']['0']['poster_path'];
-	      $title = str_replace('+', '.', $title);
-          $poster_link = 'https://image.tmdb.org/t/p/w300_and_h450_bestv2';
-          $torrent_info['poster'] = $poster_link.$copy_poster;
-        }
-	  }
-	  if($cat === 5)
-	  {
-	    $file_name = $file;
-	    switch(true) 
-		{
-	      case preg_match('/^\d+.[a-z.]+.s\d+e\d+./i', $file_name) : preg_match('/\d+.[a-z.]+.s\d+e\d+./i', $file_name, $matching); break;
-	      case preg_match('/^[a-z.]+.\d+.s\d+e\d+./i', $file_name) : preg_match('/[a-z.]+.\d+.s\d+e\d+./i', $file_name, $matching); break;
-	      case preg_match('/^\d+.[a-z.]+.s\d+./i', $file_name) : preg_match('/\d+.[a-z.]+.s\d+./i', $file_name, $matching); break;
-	      case preg_match('/^[a-z.]+.\d+.s\d+./i', $file_name) : preg_match('/[a-z.]+.\d+.s\d+./i', $file_name, $matching); break;
-	      case preg_match('/^[a-z.]+.s\d+./i', $file_name) : preg_match('/[a-z.]+.s\d+./i', $file_name, $matching); break;
-	      default : preg_match("/[a-z.]+.s\d+e\d+./i", $file_name, $matching);
-        }
-        if(preg_match('/e\d+/i', $matching[0]))
-        {
-          $title = substr_replace($matching[0],"", -8);
-        }
-        else
-        {
-          $title = substr_replace($matching[0],"", -5);
-        }
-        $title = str_replace('.', '+', $title);
-        $obj = json_decode(file_get_contents('https://api.themoviedb.org/3/search/tv?api_key='.TMDB_API.'&language=en-US&query='.$title.'&page=1'), true);
-        if($obj['total_results'] == 0)
-		{
-		 $torrent_info['poster'] = SITE_ROOT.'/pic/noposter.png';
-		}
-		else
-	    {
-          $copy_poster = $obj['results']['0']['poster_path'];
-	      $title = str_replace('+', '.', $title);
-          $poster_link = 'https://image.tmdb.org/t/p/w300_and_h450_bestv2';
-          $torrent_info['poster'] = $poster_link.$copy_poster;
-        }
-      }
-	}
-	upload_torrent($torrent, $torrent_info, $file);
+    }
+   
+    sleep(SCAN_INTERVAL);
 }
-
-function test_login()
-{
-	$login_url = SITE_ROOT.'/mytorrents.php';
-	$ch = curl_init($login_url);
-	curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
-	curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-	curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
-	curl_setopt($ch, CURLOPT_COOKIEFILE, 'cookie.txt');
-	$rez = curl_exec($ch);
-	if (!$rez) make_login();
+ 
+ 
+function setting_checker($setting, $message = "", $options = array()) {
+    // Basic settings, all should be met. If they are, proceed to options
+    if (!defined($setting)) {
+        if (!empty($message))
+            print $message . "\r\n";
+        if (in_array('die', $options))
+            die();
+        return false;
+    }
+    $constant = constant($setting);
+   
+    if (in_array('is_dir', $options) && !is_dir($constant)) {
+        if (!empty($message))
+            print $message . "\r\n";
+        if (in_array('die', $options))
+            die();
+        return false;
+    }
+   
+    if (in_array('is_file', $options) && !is_file($constant)) {
+        if (!empty($message))
+            print $message . "\r\n";
+        if (in_array('die', $options))
+            die();
+        return false;
+    }
+   
+    return true;
 }
-
-function upload_torrent($torrent, $torrent_info, $file)
-{
-	loged_in:
-	$upload_url = SITE_ROOT.'/upload.php';
-	$ch = curl_init($upload_url);
-	curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
-	curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-	curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
-	curl_setopt($ch, CURLOPT_COOKIEJAR, 'cookie.txt');
-	curl_setopt($ch, CURLOPT_COOKIEFILE, 'cookie.txt');
-	$rez = curl_exec($ch);
-	
-    $torrent_info['MAX_FILE_SIZE']=3145728;
-	$torrent_info['youtube']='';	
-	$torrent_info['file'] = new CURLFile (TEMP_TORRENT.'/'.$file.".torrent");	
-	$torrent_info['description']='Auto Upload Bot';	
-	$torrent_info['fontfont']='0';
-	$torrent_info['fontsize']='0';
-	$torrent_info['request']='0';
-	$torrent_info['release_group']='none';
-	$torrent_info['strip']=	'strip';
-	
-    $fh = fopen(JOB_LOG.'/'.$file, 'a') or die;
-	$string_data = "Name: ".$torrent_info['name'].PHP_EOL."Added: ".date("m/d/Y h:i:s").PHP_EOL."NFO: ".$torrent_info['descr']
-	.PHP_EOL."Category: ".$torrent_info['type'].PHP_EOL."IMDB: ".$torrent_info['url'];
-	fwrite($fh, $string_data);
-	fclose($fh);
-	
-    $upload_url = SITE_ROOT.'/takeupload.php';
-	$ch = curl_init($upload_url);
-	curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
-	curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-	curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
-	curl_setopt($ch, CURLOPT_HEADER, 1); 
-	curl_setopt($ch, CURLOPT_POST, 1);
-	curl_setopt($ch, CURLOPT_POSTFIELDS, $torrent_info);
-	curl_setopt($ch, CURLOPT_COOKIEFILE, 'cookie.txt');
-	$rez = curl_exec($ch);
-	if (!$rez || strpos($rez, 'login.php')) 
-	{
-	  make_login();
-	  goto loged_in;
-	}
-
-	unlink(TEMP_TORRENT.'/'.$file.".torrent");
-
-	strpos($rez,'Upload failed!') ? file_put_contents(LOG_FILE, "$file failed on ".date("m/d/Y h:i:s")."\r\n", FILE_APPEND) && move(MOVE_PATH.'/'.$file, ERROR_PATH) :
-	file_put_contents(LOG_FILE, "$file uploaded on ".date("m/d/Y h:i:s")."\r\n",FILE_APPEND);
-	//echo $rez;
-	download_torrent($file);
+ 
+function find_extension($dir, $extension, $recursive = true) {
+    if (is_dir($dir) && substr($dir, -1) != '/')
+        $dir .= '/';
+   
+    $matches = array();
+    $files   = list_dir($dir);
+    if (!$files) {
+        return array();
+    } else {
+        foreach ($files as $file) {
+            if (is_dir($dir . $file) && $recursive) {
+                $get = find_extension($dir . $file, $extension);
+                foreach ($get as $id => $item)
+                    $matches[] = $file . $item;
+            } elseif (substr($file, -1 * strlen($extension)) == $extension) {
+                $matches[] = $file;
+            }
+        }
+    }
+    return $matches;
 }
-
-function download_torrent($file) 
-{
-	$search_url = SITE_ROOT.'/browse.php?search='.$file.'&searchin=title&incldead=2';
-	$ch = curl_init($search_url);
-	curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
-	curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-	curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
-	curl_setopt($ch, CURLOPT_COOKIEFILE, 'cookie.txt');
-	$rez = curl_exec($ch);
-
-	preg_match('/download\.php\?torrent=([0-9]+)/', $rez, $sub);
-	//print_r($sub);	
-	$id = $sub[0];
-	
-	$download_url = SITE_ROOT.'/'.$id;
-	$ch = curl_init($download_url);
-	curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
-	curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-	curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
-	curl_setopt($ch, CURLOPT_COOKIEFILE, 'cookie.txt');
-	$rez = curl_exec($ch);
-
-	file_put_contents(TORRENT_PATH.'/'.$file.".torrent", $rez);
-        
-    if(SCENE_AXX != true)
-	{
-	  exec("rm -rf ".MOVE_PATH."/".$file);
-	}
-
+ 
+function list_dir($directory) {
+    if (substr($directory, -1) != '/')
+        $directory .= '/';
+    if (is_dir($directory)) {
+        $listing = array();
+        if ($dir_handle = opendir($directory)) {
+            while (($item = readdir($dir_handle)) !== false) {
+                if ($item != '..' && $item != '.') {
+                    if (is_dir($directory . $item))
+                        $item .= '/';
+                    $listing[] = $item;
+                }
+            }
+            closedir($dir_handle);
+            return $listing;
+        } else {
+            return false;
+        }
+    } else {
+        return false;
+    }
 }
-
-function scan_folder()
-{
-	$dir = UPLOAD_PATH;
-	$dir_done = MOVE_PATH;
-	
-	if ( !is_dir($dir_done) )
-	{
-	  $ok = mkdir($dir_done);
-	  if (!$ok) die('Cannot create destination folder!');
-	}
-	
-	$dh = opendir($dir);
-	while ( $file = readdir($dh) )
-	{
-	  if ($file == '.' || $file == '..') continue;
-	  $file_full = $dir.'/'.$file;
-	  if ($file_full == MOVE_PATH) continue;
-	  $ext = pathinfo($file_full, PATHINFO_EXTENSION);
-	  make_upload($file_full, $ext, $dir_done);
-	}
+ 
+function write_log($file, $message) {
+    $handler = fopen($file, "a");
+    if ($handler === FALSE) {
+        print "Error opening log file $file \r\n";
+        return;
+    }
+   
+    fwrite($handler, date(LOG_STAMP_FORMAT) . " - $message\r\n");
+   
+    fclose($handler);
 }
-
-test_login();
-scan_folder();
+ 
+function log_in() {
+    $hash = md5(SITE_NICK . SITE_PASS);
+   
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_HTTPHEADER, Array(
+        'Expect: '
+    ));
+    curl_setopt($ch, CURLOPT_URL, 'http://YOUR-SITE-NAME-HERE/takelogin.php');
+    curl_setopt($ch, CURLOPT_COOKIEJAR, TMP_DIR . 'cookies' . $hash . '.txt');
+    curl_setopt($ch, CURLOPT_COOKIEFILE, TMP_DIR . 'cookies' . $hash . '.txt');
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_REFERER, 'http://YOUR-SITE-NAME-HERE/login.php?');
+    curl_setopt($ch, CURLOPT_POST, 1);
+    $post = array(
+        "username" => SITE_NICK,
+        "password" => SITE_PASS
+    );
+    curl_setopt($ch, CURLOPT_POSTFIELDS, $post);
+    $response = curl_exec($ch);
+    curl_close($ch);
+   
+    return $response;
+}
+ 
+function upload($torrent_file, $name, $nfo) {
+    $hash = md5(SITE_NICK . SITE_PASS);
+   
+    $imdb = "";
+    if (preg_match('/http:\/\/www.imdb.com\/title\/tt[\d]+\//', $nfo, $matches)) {
+        $imdb = $matches[0];
+    }
+   
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_HTTPHEADER, Array(
+        'Expect: '
+    ));
+    curl_setopt($ch, CURLOPT_URL, 'http://YOUR-SITE-NAME-HERE/upload.php');
+    curl_setopt($ch, CURLOPT_COOKIEJAR, TMP_DIR . 'cookies' . $hash . '.txt');
+    curl_setopt($ch, CURLOPT_COOKIEFILE, TMP_DIR . 'cookies' . $hash . '.txt');
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_REFERER, 'http://YOUR-SITE-NAME-HERE/upload.php');
+    curl_setopt($ch, CURLOPT_POST, 1);
+    $post = array(
+        "torrentfile" => "@$torrent_file",
+        "MAX_FILE_SIZE" => "1500000",
+        "message" => $nfo,
+        "subject" => $name,
+        "category" => CATEGORY,
+        "t_link" => $imdb
+    );
+    curl_setopt($ch, CURLOPT_POSTFIELDS, $post);
+    $response = curl_exec($ch);
+    curl_close($ch);
+   
+    return $response;
+}
+ 
+function get_page($page) {
+    $hash = md5(SITE_NICK . SITE_PASS);
+   
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_HTTPHEADER, Array(
+        'Expect: '
+    ));
+    curl_setopt($ch, CURLOPT_URL, $page);
+    curl_setopt($ch, CURLOPT_COOKIEJAR, TMP_DIR . 'cookies' . $hash . '.txt');
+    curl_setopt($ch, CURLOPT_COOKIEFILE, TMP_DIR . 'cookies' . $hash . '.txt');
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_REFERER, 'http://YOUR-SITE-NAME-HERE/');
+    $response = curl_exec($ch);
+    curl_close($ch);
+   
+    return $response;
+}
 ?>
